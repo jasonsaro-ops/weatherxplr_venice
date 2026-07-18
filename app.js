@@ -94,7 +94,7 @@ const config = {
                 content: [
                     { type: 'component', componentName: 'cloudMap', title: 'WINDY DYNAMIC TRACKING & ARRAYS' },
                     { type: 'component', componentName: 'airQualityPanel', title: 'REGIONAL AIR QUALITY MATRIX (AIRNOW LIVE)' },
-                    { type: 'component', componentName: 'noaaTides', title: 'NOAA TIDES & CURRENTS (STATION 8725899)' }
+                    { type: 'component', componentName: 'noaaTides', title: 'NOAA TIDES & CURRENTS (STATION 8726384 - PORT MANATEE)' }
                 ]
             }
         ]
@@ -555,73 +555,106 @@ function openAQIDetails(key) {
 }
 
 function fetchNOAATides() {
-    const station = '8725899'; 
-    const timeZone = 'lst_ldt'; 
+    // NOTE: 8725899 (Nokomis/Venice Inlet) is a tide-PREDICTION-ONLY subordinate
+    // station - it has no real-time water level or meteorological sensors, so
+    // water_level/air_temperature requests against it always come back empty.
+    // 8726384 (Port Manatee, FL) is the nearest active NOAA NWLON station with
+    // live water level data and is used for the "observed" readings below.
+    const station = '8726384';
+    const timeZone = 'lst_ldt';
     const units = 'english';
     const format = 'json';
-    const date = 'today'; 
+    const date = 'today';
 
     const baseUrl = `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?station=${station}&time_zone=${timeZone}&units=${units}&format=${format}&date=${date}`;
 
+    // Helper: fetch a product and resolve to null (instead of rejecting) on any
+    // failure - either a network error, a non-OK response, or a NOAA "error"
+    // payload (NOAA returns HTTP 200 with an {error:{...}} body for unsupported
+    // products/stations rather than a proper HTTP error).
+    function fetchProduct(url) {
+        return fetch(url)
+            .then(r => r.json())
+            .then(json => (json && json.error) ? null : json)
+            .catch(() => null);
+    }
+
     Promise.all([
-        fetch(`${baseUrl}&product=water_level&datum=MLLW`).then(r => r.json()),
-        fetch(`${baseUrl}&product=water_level&datum=NAVD`).then(r => r.json()),
-        fetch(`${baseUrl}&product=predictions&datum=MLLW`).then(r => r.json()),
-        fetch(`${baseUrl}&product=air_temperature`).then(r => r.json()).catch(() => ({ data: null }))
+        fetchProduct(`${baseUrl}&product=water_level&datum=MLLW`),
+        fetchProduct(`${baseUrl}&product=water_level&datum=NAVD`),
+        fetchProduct(`${baseUrl}&product=predictions&datum=MLLW`),
+        fetchProduct(`${baseUrl}&product=air_temperature`)
     ]).then(([wlMllw, wlNavd, predsMllw, airTemp]) => {
-        
-        const latestWlMllw = wlMllw.data ? wlMllw.data[wlMllw.data.length - 1] : null;
-        const latestWlNavd = wlNavd.data ? wlNavd.data[wlNavd.data.length - 1] : null;
-        const latestAirTemp = airTemp.data ? airTemp.data[airTemp.data.length - 1] : null;
+
+        const latestWlMllw = wlMllw && wlMllw.data && wlMllw.data.length ? wlMllw.data[wlMllw.data.length - 1] : null;
+        const latestWlNavd = wlNavd && wlNavd.data && wlNavd.data.length ? wlNavd.data[wlNavd.data.length - 1] : null;
+        const latestAirTemp = airTemp && airTemp.data && airTemp.data.length ? airTemp.data[airTemp.data.length - 1] : null;
 
         let gaugeHtml = `<div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:6px;">`;
-        if (latestWlMllw) gaugeHtml += `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">MLLW</div><div style="font-size:1.4rem; color:#00ffcc; font-weight:bold;">${latestWlMllw.v}</div><div style="font-size:0.6rem; color:#8b949e;">ft</div></div>`;
-        if (latestWlNavd) gaugeHtml += `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">NAVD</div><div style="font-size:1.4rem; color:#00ffcc; font-weight:bold;">${latestWlNavd.v}</div><div style="font-size:0.6rem; color:#8b949e;">ft</div></div>`;
-        if (latestAirTemp) gaugeHtml += `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">AIR TEMP</div><div style="font-size:1.4rem; color:#00ffcc; font-weight:bold;">${latestAirTemp.v}</div><div style="font-size:0.6rem; color:#8b949e;">°F</div></div>`;
+        gaugeHtml += latestWlMllw
+            ? `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">MLLW</div><div style="font-size:1.4rem; color:#00ffcc; font-weight:bold;">${latestWlMllw.v}</div><div style="font-size:0.6rem; color:#8b949e;">ft</div></div>`
+            : `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">MLLW</div><div style="font-size:0.9rem; color:#8b949e;">N/A</div></div>`;
+        gaugeHtml += latestWlNavd
+            ? `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">NAVD</div><div style="font-size:1.4rem; color:#00ffcc; font-weight:bold;">${latestWlNavd.v}</div><div style="font-size:0.6rem; color:#8b949e;">ft</div></div>`
+            : `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">NAVD</div><div style="font-size:0.9rem; color:#8b949e;">N/A</div></div>`;
+        gaugeHtml += latestAirTemp
+            ? `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">AIR TEMP</div><div style="font-size:1.4rem; color:#00ffcc; font-weight:bold;">${latestAirTemp.v}</div><div style="font-size:0.6rem; color:#8b949e;">°F</div></div>`
+            : `<div style="background:#161b22; border:1px solid #30363d; border-radius:3px; padding:6px; text-align:center;"><div style="font-size:0.65rem; color:#8b949e; font-weight:bold; margin-bottom:3px;">AIR TEMP</div><div style="font-size:0.9rem; color:#8b949e;">N/A</div></div>`;
         gaugeHtml += `</div>`;
 
-        $('#noaa-gauges').html(gaugeHtml || '<span style="color:#ff5555;">NOAA TIMEOUT</span>');
+        if (!latestWlMllw && !latestWlNavd && !latestAirTemp) {
+            gaugeHtml += `<div style="margin-top:6px;"><span style="color:#ff8800; font-size:0.7rem;"><i class="fa-solid fa-triangle-exclamation"></i> LIVE SENSOR DATA UNAVAILABLE - SHOWING PREDICTIONS ONLY</span></div>`;
+        }
 
-        const labels = wlMllw.data ? wlMllw.data.map(d => {
+        $('#noaa-gauges').html(gaugeHtml);
+
+        // Prefer timestamps from the observed feed; fall back to the
+        // predictions feed so the chart still renders when live sensor data
+        // is unavailable.
+        const timeSource = (wlMllw && wlMllw.data && wlMllw.data.length) ? wlMllw.data
+            : (predsMllw && predsMllw.predictions ? predsMllw.predictions : []);
+        const labels = timeSource.map(d => {
             const timeParts = d.t.split(' ')[1].split(':');
             return `${timeParts[0]}:${timeParts[1]}`;
-        }) : [];
-        const dataMllw = wlMllw.data ? wlMllw.data.map(d => parseFloat(d.v)) : [];
-        const dataPreds = predsMllw.predictions ? predsMllw.predictions.map(d => parseFloat(d.v)) : [];
+        });
+        const dataMllw = (wlMllw && wlMllw.data) ? wlMllw.data.map(d => parseFloat(d.v)) : [];
+        const dataPreds = (predsMllw && predsMllw.predictions) ? predsMllw.predictions.map(d => parseFloat(d.v)) : [];
 
         const ctx = document.getElementById('noaaChart').getContext('2d');
         if(noaaChartInstance) noaaChartInstance.destroy();
-        
+
         Chart.defaults.color = '#8b949e';
         Chart.defaults.font.family = "'Share Tech Mono', monospace";
-        
+
+        const datasets = [];
+        if (dataMllw.length) {
+            datasets.push({
+                label: 'Observed (MLLW) ft',
+                data: dataMllw,
+                borderColor: '#00ffcc',
+                backgroundColor: 'rgba(0, 255, 204, 0.1)',
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: true,
+                tension: 0.4
+            });
+        }
+        if (dataPreds.length) {
+            datasets.push({
+                label: 'Predicted (MLLW) ft',
+                data: dataMllw.length ? dataPreds.slice(0, labels.length) : dataPreds,
+                borderColor: '#ff5555',
+                borderDash: [4, 4],
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: !dataMllw.length,
+                tension: 0.4
+            });
+        }
+
         noaaChartInstance = new Chart(ctx, {
             type: 'line',
-            data: {
-                labels: labels,
-                datasets: [
-                    {
-                        label: 'Observed (MLLW) ft',
-                        data: dataMllw,
-                        borderColor: '#00ffcc',
-                        backgroundColor: 'rgba(0, 255, 204, 0.1)',
-                        borderWidth: 2,
-                        pointRadius: 0,
-                        fill: true,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'Predicted (MLLW) ft',
-                        data: dataPreds.slice(0, labels.length),
-                        borderColor: '#ff5555',
-                        borderDash: [4, 4],
-                        borderWidth: 2,
-                        pointRadius: 0,
-                        fill: false,
-                        tension: 0.4
-                    }
-                ]
-            },
+            data: { labels: labels, datasets: datasets },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
